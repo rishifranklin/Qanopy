@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/icons">
+    <file>../assets/tech_ram_icon_156951.ico</file>
+  </qresource>
+</RCC>

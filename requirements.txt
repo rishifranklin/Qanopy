@@ -1,0 +1,5 @@
+PyQt6==6.7.1
+pyqtgraph==0.13.7
+python-can>=4.4.2
+cantools==39.4.11
+numpy==1.26.4
