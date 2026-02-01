@@ -1,3 +1,19 @@
+"""
+Copyright 2026 [Rishi Franklin]
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+"""
+
 from __future__ import annotations
 
 from typing import Set
@@ -87,7 +103,9 @@ class FilterMdiSubWindow(QMdiSubWindow):
     def _get_dbc_key(self) -> str:
         k = self.cmb_dbc.currentData()
         if not k:
-            raise RuntimeError("No DBC selected")
+            # raise RuntimeError("No DBC selected")
+            QMessageBox.information(self, "Filter", "Selected DBC no longer exists.")
+            return None
         return str(k)
 
     def _reload_dbcs(self) -> None:
@@ -118,6 +136,10 @@ class FilterMdiSubWindow(QMdiSubWindow):
             sid = self._get_session_id()
             dbc_key = self._get_dbc_key()
             sess = self.sessions.get(sid)
+
+            if sess == None:
+                QMessageBox.information(self, "Filter", "Selected DBC no longer exists.")
+                return
 
             if not sess.dbcs.has(dbc_key):
                 QMessageBox.information(self, "Filter", "Selected DBC no longer exists.")
@@ -164,6 +186,10 @@ class FilterMdiSubWindow(QMdiSubWindow):
         sid = self._get_session_id()
         dbc_key = self._get_dbc_key()
         sess = self.sessions.get(sid)
+
+        if sess == None:
+            QMessageBox.information(self, "Filter", "Selected DBC no longer exists.")
+            return
 
         enabled = self.chk_enable.isChecked()
         mode = self.cmb_mode.currentText().strip().lower()

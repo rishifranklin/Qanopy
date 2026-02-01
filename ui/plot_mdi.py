@@ -1,3 +1,19 @@
+"""
+Copyright 2026 [Rishi Franklin]
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+"""
+
 from __future__ import annotations
 
 import random
@@ -192,6 +208,9 @@ class PlotMdiSubWindow(QMdiSubWindow):
       - X axis is absolute time (no shifting).
       - Y axis can show DBC enum labels via EnumAxisItem.
       - Per-graph style controls (line + background).
+
+    NEW:
+      - Show values under cursor A/B (and ΔY for numeric signals).
     """
 
     def __init__(self, datastore: DataStore, sessions: SessionManager) -> None:
@@ -208,6 +227,9 @@ class PlotMdiSubWindow(QMdiSubWindow):
         self._cursor_a_x = 0.0
         self._cursor_b_x = 0.0
         self._cursor_sync_guard = False
+
+        # NEW: throttle UI updates of cursor readout (avoid UI churn at 20 Hz)
+        self._readout_tick = 0
 
         root = QWidget()
         self.setWidget(root)
@@ -238,6 +260,8 @@ class PlotMdiSubWindow(QMdiSubWindow):
         self.btn_fit = QPushButton("Zoom to fit")
         self.btn_fit.clicked.connect(self._zoom_to_fit)
 
+        self.lbl_cursor = QLabel("Cursor: -")
+
         top.addWidget(self.chk_pause)
         top.addSpacing(10)
         top.addWidget(QLabel("Line"))
@@ -249,9 +273,16 @@ class PlotMdiSubWindow(QMdiSubWindow):
         top.addWidget(self.chk_grid)
         top.addSpacing(10)
         top.addWidget(self.btn_fit)
+        top.addSpacing(10)
+        top.addWidget(self.lbl_cursor)
         top.addStretch(1)
 
         layout.addLayout(top)
+
+        # NEW: Cursor value readout label
+        self.lbl_cursor_values = QLabel("Values @ Cursors: -")
+        self.lbl_cursor_values.setWordWrap(True)
+        layout.addWidget(self.lbl_cursor_values)
 
         self.glw = pg.GraphicsLayoutWidget()
         layout.addWidget(self.glw)
@@ -299,6 +330,9 @@ class PlotMdiSubWindow(QMdiSubWindow):
         self._apply_grid()
         self._install_cursors_for_plot(plot)
 
+        # NEW: attempt to populate readout (even if data arrives later)
+        self._update_cursor_value_readout()
+
     def add_derived_difference(self, a_key: str, a_name: str, b_key: str, b_name: str) -> None:
         name = f"DIFF: ({a_name}) - ({b_name})"
 
@@ -328,6 +362,9 @@ class PlotMdiSubWindow(QMdiSubWindow):
 
         self._apply_grid()
         self._install_cursors_for_plot(plot)
+
+        # NEW: attempt to populate readout
+        self._update_cursor_value_readout()
 
     # Plot creation
     def _create_plot(
@@ -428,6 +465,12 @@ class PlotMdiSubWindow(QMdiSubWindow):
         ms = int(self.sp_snap_ms.value())
         self._snap_s = (ms / 1000.0) if ms > 0 else 0.0
 
+        # NEW: snap current cursor positions immediately (so readout matches)
+        self._cursor_a_x = self._apply_snap(self._cursor_a_x)
+        self._cursor_b_x = self._apply_snap(self._cursor_b_x)
+        self._sync_cursor_lines()
+        self._update_cursor_value_readout()
+
     # Data fetch + refresh
     def _fetch_xy(self, key: str) -> Tuple[np.ndarray, np.ndarray]:
         ds = self.datastore
@@ -458,6 +501,11 @@ class PlotMdiSubWindow(QMdiSubWindow):
                 ch.curve.setData(x, y)
 
         self._sync_cursor_lines()
+
+        # NEW: Throttled readout refresh so it stays correct as data grows
+        self._readout_tick = (self._readout_tick + 1) & 0xFFFF
+        if (self._readout_tick % 5) == 0:  # ~4 Hz at 20 Hz refresh
+            self._update_cursor_value_readout()
 
     def _refresh_derived(self, ch: PlotChannel) -> None:
         if not ch.src_a or not ch.src_b:
@@ -568,15 +616,20 @@ class PlotMdiSubWindow(QMdiSubWindow):
             if which == "A":
                 x = float(src_plot._pycan_cursor_a.value())  # type: ignore[attr-defined]
                 self._cursor_a_x = self._apply_snap(x)
+                self.lbl_cursor.setText(f"Cursor [A]: {x:.3f}")
             else:
                 x = float(src_plot._pycan_cursor_b.value())  # type: ignore[attr-defined]
                 self._cursor_b_x = self._apply_snap(x)
+                self.lbl_cursor.setText(f"Cursor [B]: {x:.3f}")
         except Exception:
             return
 
         self._sync_cursor_lines()
         dt_ms = abs(self._cursor_b_x - self._cursor_a_x) * 1000.0
         self.setWindowTitle(f"Plots  |  Δt={dt_ms:.3f} ms")
+
+        # NEW: immediate readout refresh on cursor move
+        self._update_cursor_value_readout()
 
     def _sync_cursor_lines(self) -> None:
         self._cursor_sync_guard = True
@@ -588,6 +641,135 @@ class PlotMdiSubWindow(QMdiSubWindow):
                     p._pycan_cursor_b.setPos(self._cursor_b_x)  # type: ignore[attr-defined]
         finally:
             self._cursor_sync_guard = False
+
+    # ---------------- NEW: Cursor value readout ----------------
+
+    def _y_at(self, x: np.ndarray, y: np.ndarray, xq: float) -> Optional[float]:
+        """
+        Get y-value at time xq. Uses interpolation if x is monotonic, otherwise nearest.
+        Clamps to first/last sample outside range.
+        """
+        try:
+            if x is None or y is None:
+                return None
+            x = np.asarray(x, dtype=float)
+            y = np.asarray(y, dtype=float)
+            if x.size < 1 or y.size < 1:
+                return None
+            if x.size == 1:
+                return float(y[0])
+
+            # If not monotonic increasing, fallback to nearest point
+            if np.any(np.diff(x) < 0):
+                idx = int(np.argmin(np.abs(x - float(xq))))
+                return float(y[idx])
+
+            if float(xq) <= float(x[0]):
+                return float(y[0])
+            if float(xq) >= float(x[-1]):
+                return float(y[-1])
+
+            return float(np.interp(float(xq), x, y))
+        except Exception:
+            return None
+
+    def _fmt_value(self, ch: PlotChannel, v: Optional[float]) -> str:
+        if v is None:
+            return "-"
+
+        # categorical / enum
+        if ch.choices:
+            try:
+                iv = int(round(float(v)))
+                lbl = ch.choices.get(iv, None)
+                if lbl is not None:
+                    return f"{lbl} ({iv})"
+                return f"{iv}"
+            except Exception:
+                return str(v)
+
+        # numeric
+        try:
+            fv = float(v)
+            if ch.unit:
+                return f"{fv:.6g} {ch.unit}"
+            return f"{fv:.6g}"
+        except Exception:
+            return str(v)
+
+    def _fmt_delta(self, ch: PlotChannel, a: Optional[float], b: Optional[float]) -> str:
+        if a is None or b is None:
+            return ""
+        if ch.choices:
+            return ""  # Δ doesn't mean anything for enums
+        try:
+            dv = float(b) - float(a)
+            if ch.unit:
+                return f"{dv:.6g} {ch.unit}"
+            return f"{dv:.6g}"
+        except Exception:
+            return ""
+
+    def _value_pair_for_channel(self, ch: PlotChannel, xa: float, xb: float) -> Tuple[Optional[float], Optional[float]]:
+        """
+        Returns (value_at_A, value_at_B) for channel, using datastore series
+        so it works regardless of pyqtgraph downsampling/clipping.
+        """
+        if ch.is_derived:
+            if not ch.src_a or not ch.src_b:
+                return (None, None)
+
+            x1, y1 = self._fetch_xy(ch.src_a)
+            x2, y2 = self._fetch_xy(ch.src_b)
+            if x1.size < 1 or x2.size < 1:
+                return (None, None)
+
+            a1 = self._y_at(x1, y1, xa)
+            b1 = self._y_at(x1, y1, xb)
+            a2 = self._y_at(x2, y2, xa)
+            b2 = self._y_at(x2, y2, xb)
+
+            va = (a1 - a2) if (a1 is not None and a2 is not None) else None
+            vb = (b1 - b2) if (b1 is not None and b2 is not None) else None
+            return (va, vb)
+
+        x, y = self._fetch_xy(ch.key)
+        if x.size < 1:
+            return (None, None)
+        return (self._y_at(x, y, xa), self._y_at(x, y, xb))
+
+    def _update_cursor_value_readout(self) -> None:
+        if not self._channels:
+            self.lbl_cursor_values.setText("Values @ Cursors: -")
+            return
+
+        xa = float(self._cursor_a_x)
+        xb = float(self._cursor_b_x)
+
+        lines: List[str] = []
+        MAX_LINES = 12
+
+        # show values for all stacked plots
+        for ch in self._channels[:MAX_LINES]:
+            va, vb = self._value_pair_for_channel(ch, xa, xb)
+
+            a_txt = self._fmt_value(ch, va)
+            b_txt = self._fmt_value(ch, vb)
+            d_txt = self._fmt_delta(ch, va, vb)
+
+            if d_txt:
+                lines.append(f"{ch.name}:  A={a_txt}   B={b_txt}   Δ={d_txt}")
+            else:
+                lines.append(f"{ch.name}:  A={a_txt}   B={b_txt}")
+
+        if len(self._channels) > MAX_LINES:
+            lines.append(f"... ({len(self._channels) - MAX_LINES} more)")
+
+        if not lines:
+            self.lbl_cursor_values.setText("Values @ Cursors: -")
+            return
+
+        self.lbl_cursor_values.setText("\n".join(lines))
 
     # Cleanup
     def closeEvent(self, event) -> None:

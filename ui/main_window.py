@@ -1,3 +1,19 @@
+"""
+Copyright 2026 [Rishi Franklin]
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+"""
+
 from __future__ import annotations
 
 from typing import Optional
@@ -64,7 +80,7 @@ class MainWindow(QMainWindow):
         self._build_actions()
         self._build_menu()
         self._refresh_tree()
-        
+
         self.app_state = AppState()
 
     def _build_actions(self) -> None:
@@ -104,6 +120,9 @@ class MainWindow(QMainWindow):
     def _build_menu(self) -> None:
         menu = self.menuBar()
 
+        m_file = menu.addMenu("File")
+        m_file.addAction(self.act_exit)
+
         m_session = menu.addMenu("Session")
         m_session.addAction(self.act_add_session)
         m_session.addAction(self.act_add_dbc_to_session)
@@ -121,9 +140,6 @@ class MainWindow(QMainWindow):
         m_tools.addAction(self.act_open_filter)
         m_tools.addAction(self.act_open_tx)
         m_tools.addAction(self.act_open_trace)
-
-        m_file = menu.addMenu("File")
-        m_file.addAction(self.act_exit)
 
     def _on_session_selected(self, session_id: str) -> None:
         self.selected_session_id = session_id
@@ -213,6 +229,9 @@ class MainWindow(QMainWindow):
             self.selected_session_id = None
         self._refresh_tree()
 
+        QMessageBox.warning(self, "Session", "Session closed. Close all open windows.")
+
+
     def _ensure_plot_window(self) -> PlotMdiSubWindow:
         if self._plot_window is None or self._plot_window.isHidden():
             self._plot_window = PlotMdiSubWindow(self.datastore, self.sessions)  # <-- changed
@@ -283,6 +302,11 @@ class MainWindow(QMainWindow):
         w.show()
 
     def on_open_filter(self) -> None:
+        # do not open window unless a session is active
+        if len(self.sessions.all_sessions()) == 0:
+            QMessageBox.warning(self, "Session", "No active session.")
+            return None
+
         w = FilterMdiSubWindow(self.sessions)
         self.mdi.addSubWindow(w)
         w.show()

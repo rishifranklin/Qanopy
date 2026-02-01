@@ -101,3 +101,12 @@ Qanopy relies on standard Python libraries for engineering and GUI work:
 ```bash
 # Example installation
 pip install PyQt6 pyqtgraph python-can cantools numpy
+
+## License & Attribution
+
+This project is licensed under the **Apache License 2.0**. 
+
+If you use this software in a commercial product or a research project, 
+attribution is required under the terms of the license. Please credit as:
+
+> **Qanopy** by [Rishi Franklin] (https://github.com/rishifranklin)
