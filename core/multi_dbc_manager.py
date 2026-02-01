@@ -19,6 +19,12 @@ class DbcEntry:
     db: cantools.database.Database
 
 
+class DbcCollisionError(RuntimeError):
+    def __init__(self, message: str, collisions) -> None:
+        super().__init__(message)
+        self.collisions = collisions
+
+
 class MultiDbcManager:
     """
     Multiple DBCs per CAN session, keyed by basename (tree node requirement).
@@ -32,6 +38,7 @@ class MultiDbcManager:
     def __init__(self, on_warning=None) -> None:
         self._lock = RLock()
         self._dbcs: Dict[str, DbcEntry] = {}
+        self._owned_ids: Dict[int, Tuple[str, str]] = {}
         self._frame_index: Dict[int, str] = {}          # frame_id -> dbc_key
         self._collisions: Dict[int, List[str]] = {}     # frame_id -> [dbc_key...]
         self._on_warning = on_warning
@@ -88,6 +95,50 @@ class MultiDbcManager:
                 self._frame_index[fid] = key
 
             return key
+
+
+    def add_db_strict(self, dbc_key: str, db: Any) -> None:
+        """
+        Adds a DBC but rejects if any frame IDs overlap with existing DBCs in this session.
+        """
+        err = self.can_add_db_no_collisions(dbc_key, db)
+        if err is not None:
+            # keep the detailed collisions list too, for UI
+            new_map = dbc_frame_id_map(db)
+            collisions = find_frame_id_collisions(self._owned_ids, new_map, dbc_key)
+            raise DbcCollisionError(err, collisions)
+
+        # Accept
+        self._dbs[dbc_key] = db
+
+        # Update owned ids map
+        new_map = dbc_frame_id_map(db)
+        for fid, name in new_map.items():
+            self._owned_ids[fid] = (dbc_key, name)
+
+
+    def can_add_db_no_collisions(self, dbc_key: str, db: Any) -> Optional[str]:
+        """
+        Returns None if ok; else returns a human readable error string.
+        """
+        new_map = dbc_frame_id_map(db)
+        collisions = find_frame_id_collisions(self._owned_ids, new_map, dbc_key)
+        if not collisions:
+            return None
+
+        # Build a concise message (don’t dump 1000 ids in one dialog)
+        lines = []
+        lines.append(f"DBC '{dbc_key}' contains CAN IDs that already exist in this session.")
+        lines.append("")
+        lines.append("Conflicts (first 30):")
+        for fid, (old_dbc, old_msg), new_msg in collisions[:30]:
+            lines.append(f"  0x{fid:X}: existing [{old_dbc}:{old_msg}]  vs  new [{new_msg}]")
+
+        if len(collisions) > 30:
+            lines.append(f"... and {len(collisions)-30} more.")
+
+        return "\n".join(lines)
+
 
     def remove(self, dbc_key: str) -> None:
         with self._lock:

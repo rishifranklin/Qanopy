@@ -49,6 +49,7 @@ class CanManager:
                     interface=cfg.interface,
                     channel=cfg.channel,
                     bitrate=cfg.bitrate,
+                    include_error_frames=True
                 )
                 if cfg.fd:
                     kwargs["fd"] = True
@@ -60,7 +61,11 @@ class CanManager:
                     kwargs["fd"] = True
                     kwargs["data_bitrate"] = cfg.data_bitrate
                     
-                kwargs = dict(bustype='vector', app_name='Qanopy', channel=cfg.channel, bitrate=cfg.bitrate)
+                kwargs = dict(bustype='vector',
+                              app_name='Qanopy',
+                              channel=cfg.channel,
+                              bitrate=cfg.bitrate,
+                              include_error_frames=True)
             else:
                 pass
                 

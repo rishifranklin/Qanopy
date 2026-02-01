@@ -67,7 +67,7 @@ class CanRxThread(QThread):
                 msg = self.bus.recv(timeout=0.1)
             except Exception as e:
                 self.error_signal.emit("CAN Receive Error", f"[{self.session_name}] {e}")
-                time.sleep(0.2)
+                time.sleep(0.01)
                 continue
 
             if msg is None:
