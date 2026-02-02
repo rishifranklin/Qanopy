@@ -76,7 +76,7 @@ class CanRxThread(QThread):
 
     def run(self) -> None:
         self.status_signal.emit(f"[{self.session_name}] RX thread started")
-        t0 = monotonic_seconds()
+        t0 = time.perf_counter()
 
         while self._running:
             try:
@@ -89,7 +89,7 @@ class CanRxThread(QThread):
             if msg is None:
                 continue
 
-            t = monotonic_seconds() - t0
+            t = time.perf_counter() - t0
 
             arb_id = int(msg.arbitration_id)
             is_ext = bool(getattr(msg, "is_extended_id", False))
